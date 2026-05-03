@@ -1,0 +1,5 @@
+pyserial~=3.5
+cushy-serial~=1.1.1
+customtkinter~=5.2.2
+matplotlib~=3.10.9
+numpy~=2.4.4
