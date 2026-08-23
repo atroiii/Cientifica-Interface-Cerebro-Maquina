@@ -1,29 +1,4 @@
-from enum import Enum
-
-
-class State(Enum):
-    A = "A"
-    B = "B"
-    C = "C"
-    D = "D"
-    E = "E"
-
-    def __le__(self, other):
-        order = [State.A, State.B, State.C, State.D, State.E]
-        return order.index(self) <= order.index(other)
-
-    def __lt__(self, other):
-        order = [State.A, State.B, State.C, State.D, State.E]
-        return order.index(self) < order.index(other)
-
-    def __ge__(self, other):
-        order = [State.A, State.B, State.C, State.D, State.E]
-        return order.index(self) >= order.index(other)
-
-    def __gt__(self, other):
-        order = [State.A, State.B, State.C, State.D, State.E]
-        return order.index(self) > order.index(other)
-
+from core.state_enum import State
 
 class EEGStateMachine:
     def __init__(self, alpha=0.50):
@@ -33,9 +8,11 @@ class EEGStateMachine:
         self.bloqueado = False
         self.piso = State.B
 
+    #metodo para filtra a atenção
     def _filtro_passa_baixa(self, valor_atual, valor_anterior):
         return self.alpha * valor_atual + (1 - self.alpha) * valor_anterior
 
+    #metodo para saber qual o estado atual (para manda para o arduino posteriormente)
     def _transicao(self, att):
         match self.estado_atual:
             case State.A:
@@ -82,6 +59,7 @@ class EEGStateMachine:
                         self.estado_atual = State.B
                         self.bloqueado = True
 
+    #metodo que receber a os dados atenção bruto, passa o filtro e retorna
     def processar(self, raw_attention) -> State:
         self.att_filtrado = self._filtro_passa_baixa(raw_attention, self.att_filtrado)
         att = self.att_filtrado
