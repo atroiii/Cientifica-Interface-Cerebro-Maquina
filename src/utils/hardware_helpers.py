@@ -1,35 +1,66 @@
+import re
+
 import serial.tools.list_ports
 
+try:
+    import winreg
+except ImportError:  # fora do Windows não há registro
+    winreg = None
 
-def listar_portas():
-    portas = serial.tools.list_ports.comports()
-    if not portas:
-        return ["(nenhuma porta encontrada)"]
 
-    lista = []
-    for porta in portas:
-        hwid = porta.hwid.upper()
+_CHAVE_BT = r"SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices"
+_MAC_RE = re.compile(r"&([0-9A-F]{12})_")
 
-        # 1. Conexões Bluetooth (BrainLink)
-        if "BTHENUM" in hwid:
-            nome = "BrainLink (Bluetooth)"
 
-        # 2. Arduinos Oficiais (VID 2341)
-        elif "2341" in hwid:
-            nome = "Arduino (Oficial)"
+def _mac_do_hwid(hwid: str):
+    """Extrai o MAC (12 dígitos hex) do hwid de uma porta Bluetooth, ex.: '...&98D331F5A1B2_C...'."""
+    m = _MAC_RE.search(hwid.upper())
+    return m.group(1) if m else None
 
-        # 3. Arduinos Clones/Genéricos (Chips CH340, CP2102 ou FTDI)
-        elif "1A86" in hwid:
-            nome = "Arduino (CH340)"
-        elif "10C4" in hwid:
-            nome = "Arduino / CP2102"
-        elif "0403" in hwid:
-            nome = "Módulo FTDI"
 
-        # Fallback para outros dispositivos USB
-        else:
-            nome = porta.description or "Dispositivo Serial"
+def _nome_bluetooth(mac: str):
+    """Lê o nome do dispositivo pareado no registro do Windows. Retorna None se não achar."""
+    if winreg is None:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"{_CHAVE_BT}\{mac.lower()}") as chave:
+            valor, _ = winreg.QueryValueEx(chave, "Name")
+    except OSError:
+        return None
+    if isinstance(valor, bytes):
+        valor = valor.decode("utf-8", errors="replace")
+    valor = str(valor).rstrip("\x00").strip()
+    return valor or None
 
-        lista.append(f"{porta.device} - {nome}")
 
-    return lista
+def _nome_da_porta(porta) -> str:
+    hwid = (porta.hwid or "").upper()
+
+    # 1. Portas Bluetooth (BrainLink, HC-05, ...)
+    if "BTHENUM" in hwid:
+        mac = _mac_do_hwid(hwid)
+        if mac == "000000000000":
+            return "Bluetooth (entrada, não usar)"
+        if mac:
+            return _nome_bluetooth(mac) or f"Bluetooth {mac}"
+        return "Bluetooth"
+
+    # 2. Arduinos oficiais (VID 2341)
+    if "2341" in hwid:
+        return "Arduino (Oficial)"
+
+    # 3. Arduinos clones/genéricos (chips CH340, CP2102 ou FTDI)
+    if "1A86" in hwid:
+        return "Arduino (CH340)"
+    if "10C4" in hwid:
+        return "Arduino / CP2102"
+    if "0403" in hwid:
+        return "Módulo FTDI"
+
+    # Fallback para outros dispositivos
+    return porta.description or "Dispositivo Serial"
+
+
+def listar_portas() -> list[tuple[str, str]]:
+    """Retorna [(porta, nome), ...], ex.: [("COM5", "HC-05"), ("COM7", "BrainLink_Pro")]."""
+    return [(p.device, _nome_da_porta(p)) for p in serial.tools.list_ports.comports()]

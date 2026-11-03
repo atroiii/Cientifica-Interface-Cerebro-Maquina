@@ -3,9 +3,9 @@ import customtkinter as ctk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
-import serial.tools.list_ports
 
 from src.models.eeg_buffer import EEGBuffer, HISTORY
+from src.utils.hardware_helpers import listar_portas
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -84,7 +84,9 @@ class EEGApp(ctk.CTk):
             text_color=ACCENT_1,
         ).pack(anchor="w", padx=22, pady=(20, 4))
 
-        self._arduino_var = ctk.StringVar(value=ports[0])
+        arduino_padrao, brainlink_padrao = self._portas_padrao(ports)
+
+        self._arduino_var = ctk.StringVar(value=arduino_padrao)
         self._arduino_combo = ctk.CTkOptionMenu(
             card, values=ports, variable=self._arduino_var,
             fg_color=BG_CARD, button_color=ACCENT_1, button_hover_color="#1D4ED8",
@@ -100,8 +102,7 @@ class EEGApp(ctk.CTk):
             text_color=ACCENT_2,
         ).pack(anchor="w", padx=22, pady=(16, 4))
 
-        self._brainlink_var = ctk.StringVar(
-            value=ports[-1] if len(ports) > 1 else ports[0])
+        self._brainlink_var = ctk.StringVar(value=brainlink_padrao)
         self._brainlink_combo = ctk.CTkOptionMenu(
             card, values=ports, variable=self._brainlink_var,
             fg_color=BG_CARD, button_color=ACCENT_2, button_hover_color="#6D28D9",
@@ -132,27 +133,41 @@ class EEGApp(ctk.CTk):
         self._error_label.pack()
         frame.set_error = lambda msg: self._error_label.configure(text=msg)
 
+    SEM_PORTA = "(nenhuma porta)"
+
     def _get_ports(self):
-        ports = [p.device for p in serial.tools.list_ports.comports()]
-        return ports if ports else ["(nenhuma porta)"]
+        """Textos do menu ("COM5 - HC-05"). Guarda em self._port_map o texto -> porta ("COM5")."""
+        self._port_map = {f"{porta} - {nome}": porta for porta, nome in listar_portas()}
+        return list(self._port_map) or [self.SEM_PORTA]
+
+    @staticmethod
+    def _portas_padrao(ports):
+        """Pré-seleciona o HC-05 para o Arduino e o BrainLink para o BrainLink, se existirem."""
+        def achar(trecho, padrao):
+            return next((p for p in ports if trecho.lower() in p.lower()), padrao)
+        arduino   = achar("HC-05", ports[0])
+        brainlink = achar("BrainLink", ports[-1] if len(ports) > 1 else ports[0])
+        return arduino, brainlink
 
     def _refresh_ports(self):
         ports = self._get_ports()
         self._arduino_combo.configure(values=ports)
         self._brainlink_combo.configure(values=ports)
-        self._arduino_var.set(ports[0])
-        self._brainlink_var.set(ports[-1] if len(ports) > 1 else ports[0])
+        arduino_padrao, brainlink_padrao = self._portas_padrao(ports)
+        self._arduino_var.set(arduino_padrao)
+        self._brainlink_var.set(brainlink_padrao)
         self._error_label.configure(text="portas atualizadas")
 
     def _confirm_ports(self):
-        a = self._arduino_var.get()
-        b = self._brainlink_var.get()
+        # "COM5 - HC-05" -> "COM5": o callback recebe só a porta
+        a = self._port_map.get(self._arduino_var.get())
+        b = self._port_map.get(self._brainlink_var.get())
+        if a is None or b is None:
+            self._error_label.configure(text="Nenhuma porta serial detectada.")
+            return
         if a == b:
             self._error_label.configure(
                 text="Arduino e BrainLink nao podem usar a mesma porta.")
-            return
-        if "(nenhuma)" in a or "(nenhuma)" in b:
-            self._error_label.configure(text="Nenhuma porta serial detectada.")
             return
 
         self.arduino_port   = a
