@@ -87,3 +87,4 @@ Thumbs.db
 # SDK BrainLink (Macrotellect) - sem licença, baixar manualmente
 deps/BrainLinkParser.pyd
 deps/BrainLinkParser.so
+.venv*/
