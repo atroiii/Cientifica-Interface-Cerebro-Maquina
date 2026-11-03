@@ -1,6 +1,6 @@
 import time
 import threading
-from deps import BrainLinkParser
+from deps.BrainLinkParser import BrainLinkParser
 from src.adapters.arduino_adapter import ArduinoAdapter
 from src.adapters.brainlink_adapter import BrainlinkAdapter
 from src.services.eeg_state_machine import EEGStateMachine
