@@ -1,8 +1,6 @@
 import time
 import threading
-import serial
-from cushy_serial import CushySerial
-from deps.BrainLinkParser import BrainLinkParser
+from deps import BrainLinkParser
 from src.adapters.arduino_adapter import ArduinoAdapter
 from src.adapters.brainlink_adapter import BrainlinkAdapter
 from src.services.eeg_state_machine import EEGStateMachine
