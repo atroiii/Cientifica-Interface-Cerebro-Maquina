@@ -136,27 +136,7 @@ def _windows_timer_1ms():
         pass
 
 
-def _windows_app_id():
-    """Faz o Windows agrupar a janela na barra de tarefas com o ícone do programa
-    (sem isso, rodando pelo Python, aparece o ícone do Python)."""
-    if os.name != "nt":
-        return
-    try:
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ICM.MonitorDeAtencao")
-    except (OSError, AttributeError):
-        pass
-
-
-def _resource_path(*parts):
-    """Caminho de um arquivo do projeto, rodando pelo Python ou pelo .exe (PyInstaller)."""
-    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(base, *parts)
-
-
 _windows_timer_1ms()
-_windows_app_id()
 ctk.set_appearance_mode(_load_theme())
 ctk.set_default_color_theme("blue")
 
@@ -172,11 +152,6 @@ class EEGApp(ctk.CTk):
         self.buffer = EEGBuffer()
 
         self.title("ICM · Monitor de Atenção")
-        if os.name == "nt":
-            try:
-                self.iconbitmap(_resource_path("assets", "icone.ico"))
-            except Exception:  # noqa: BLE001 — sem ícone, a janela usa o padrão
-                pass
         self.geometry("560x720")
         self.minsize(480, 640)
         self.configure(fg_color=C("bg"))
