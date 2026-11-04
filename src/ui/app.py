@@ -120,6 +120,22 @@ def _ease(p):
     return p * p * (3 - 2 * p)
 
 
+def _windows_timer_1ms():
+    """No Windows o timer padrão tem resolução de ~15,6 ms, o que faz o after() do tk
+    atrasar e a animação oscilar. timeBeginPeriod(1) baixa para 1 ms enquanto o app roda."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        import atexit
+        winmm = ctypes.WinDLL("winmm")
+        if winmm.timeBeginPeriod(1) == 0:
+            atexit.register(winmm.timeEndPeriod, 1)
+    except (OSError, AttributeError):
+        pass
+
+
+_windows_timer_1ms()
 ctk.set_appearance_mode(_load_theme())
 ctk.set_default_color_theme("blue")
 
@@ -523,7 +539,7 @@ class EEGApp(ctk.CTk):
         self.set_connected(True)
         self._refresh()
 
-    FRAME_MS = 33   # ~30 fps para o gráfico deslizar sem trancos
+    FRAME_S = 1 / 60   # 60 fps
 
     def _build_chart(self, parent):
         fig, ax = plt.subplots(figsize=(9, 4.5), dpi=100)
@@ -544,17 +560,27 @@ class EEGApp(ctk.CTk):
             "count": None,                 # contador de amostras do buffer
             "t_new": 0.0,                  # quando chegou a última amostra
             "interval": 1.0,               # intervalo médio entre amostras (s)
+            "bg": None,                    # fundo em cache para o blitting
         }
+        # animated=True: linha e área ficam fora do desenho completo e são
+        # redesenhadas sozinhas sobre o fundo em cache (blitting) a cada quadro.
         self._chart["line"], = ax.plot([], [], linewidth=2.4, solid_capstyle="round",
-                                       solid_joinstyle="round", antialiased=True, zorder=3)
-        self._chart["fill"], = ax.fill([0, 1], [0, 0], linewidth=0, zorder=2)
+                                       solid_joinstyle="round", animated=True, zorder=3)
+        self._chart["fill"], = ax.fill([0, 1], [0, 0], linewidth=0, animated=True, zorder=2)
 
         canvas = FigureCanvasTkAgg(fig, master=parent)
         widget = canvas.get_tk_widget()
         widget.configure(highlightthickness=0, bd=0)
         widget.pack(fill="both", expand=True, padx=16, pady=(16, 8))
         self._chart["canvas"] = canvas
+        # todo desenho completo (início, redimensionar, trocar tema) recaptura o fundo
+        canvas.mpl_connect("draw_event", self._on_chart_full_draw)
         self._style_chart()
+
+    def _on_chart_full_draw(self, _event):
+        ch = self._chart
+        ch["bg"] = ch["canvas"].copy_from_bbox(ch["fig"].bbox)
+        self._blit_chart()
 
     def _style_chart(self):
         ch = self._chart
@@ -567,13 +593,14 @@ class EEGApp(ctk.CTk):
         ch["fill"].set_facecolor(cur("accent"))
         ch["fill"].set_alpha(0.22)
         ch["canvas"].get_tk_widget().configure(bg=cur("panel"))
-        self._draw_chart_frame(force=True)
+        self._update_chart_data(force=True)
+        ch["canvas"].draw()   # desenho completo -> draw_event recaptura o fundo
 
     def _feed_chart(self, hist, count):
         """Registra uma nova leitura do buffer. Quando chega amostra nova, começa a
         deslizar a curva um passo para a esquerda em vez de pular de uma vez."""
         ch = self._chart
-        now = time.monotonic()
+        now = time.perf_counter()
         if count == ch["count"]:
             return
         if ch["count"] is not None and count == ch["count"] + 1:
@@ -587,15 +614,17 @@ class EEGApp(ctk.CTk):
             ch["t_new"] = now - 10.0
         ch["hist"] = list(hist)
         ch["count"] = count
+        ch["curve"] = _smooth(ch["series"])   # a curva só muda com amostra nova
 
-    def _draw_chart_frame(self, force=False):
+    def _update_chart_data(self, force=False):
+        """Posiciona a curva no instante atual. Retorna False se nada mudou."""
         ch = self._chart
-        p = _ease((time.monotonic() - ch["t_new"]) / ch["interval"])
-        if p >= 1.0 and ch.get("drawn_p") == 1.0 and not force:
-            return  # parado: nada mudou, não redesenha
+        p = _ease((time.perf_counter() - ch["t_new"]) / ch["interval"])
+        if p == ch.get("drawn_p") and not force:
+            return False
         ch["drawn_p"] = p
 
-        xs, ys = _smooth(ch["series"])
+        xs, ys = ch.get("curve") or _smooth(ch["series"])
         xs = xs - p                     # desliza: em p=1 a amostra nova chega à borda direita
         ys = np.clip(ys, 0, 100)
         ch["line"].set_data(xs, ys)
@@ -603,10 +632,21 @@ class EEGApp(ctk.CTk):
             np.concatenate(([xs[0]], xs, [xs[-1]])),
             np.concatenate(([0.0], ys, [0.0])),
         )))
-        ch["canvas"].draw_idle()
+        return True
+
+    def _blit_chart(self):
+        ch = self._chart
+        if ch["bg"] is None:
+            return
+        canvas, ax = ch["canvas"], ch["ax"]
+        canvas.restore_region(ch["bg"])
+        ax.draw_artist(ch["fill"])
+        ax.draw_artist(ch["line"])
+        canvas.blit(ax.bbox)
 
     # ── Loop de refresh — lê APENAS do buffer (mesmos dados do console) ──
     def _refresh(self):
+        t0 = time.perf_counter()
         self._update_live_label()
         if not self._paused:
             snap = self.buffer.snapshot()
@@ -614,7 +654,8 @@ class EEGApp(ctk.CTk):
             count = snap["count"]
             new_sample = count != self._chart["count"]
             self._feed_chart(hist, count)
-            self._draw_chart_frame()
+            if self._update_chart_data():
+                self._blit_chart()
 
             if new_sample:
                 att = snap["attention"]   # = Att Filtrada do console
@@ -625,7 +666,12 @@ class EEGApp(ctk.CTk):
                 self._stats["peak"].configure(text=f"{round(max(window)):d}")
                 self.update_state(snap["state"], snap["blocked"])
 
-        self.after(self.FRAME_MS, self._refresh)
+        # agenda o próximo quadro descontando o tempo gasto neste (ritmo estável)
+        self._next_frame = getattr(self, "_next_frame", t0) + self.FRAME_S
+        if self._next_frame < t0:          # atrasou: não tenta "recuperar" quadros
+            self._next_frame = t0 + self.FRAME_S
+        delay = max(1, int((self._next_frame - time.perf_counter()) * 1000))
+        self.after(delay, self._refresh)
 
     def _update_live_label(self):
         secs = int(time.monotonic() - self._session_t0)
