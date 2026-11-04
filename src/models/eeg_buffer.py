@@ -29,6 +29,7 @@ class EEGBuffer:
         self.meditation   = 0      # Meditação atual (se vier do headset)
         self.state        = "B"    # Estado atual (A/B/C/D/E)
         self.blocked      = False  # Bloqueado atual
+        self.count        = 0      # nº de amostras recebidas (a UI anima quando muda)
 
         # ── histórico (para o gráfico de linha) ────────────────────────────
         self.att_hist   = deque([0.0] * HISTORY, maxlen=HISTORY)
@@ -50,6 +51,7 @@ class EEGBuffer:
             self.blocked    = blocked
             self.att_hist.append(att_filtrada)
             self.med_hist.append(meditation)
+            self.count += 1
 
     # Compatibilidade com código legado que chame update(EEGData)
     def update(self, data: EEGData):
@@ -58,6 +60,7 @@ class EEGBuffer:
             self.meditation = data.meditation
             self.att_hist.append(float(data.attention))
             self.med_hist.append(float(data.meditation))
+            self.count += 1
 
     def snapshot(self):
         with self._lock:
@@ -68,4 +71,5 @@ class EEGBuffer:
                 "blocked":    self.blocked,
                 "att_hist":   list(self.att_hist),
                 "med_hist":   list(self.med_hist),
+                "count":      self.count,
             }

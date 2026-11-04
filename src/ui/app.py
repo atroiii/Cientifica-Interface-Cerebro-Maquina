@@ -94,18 +94,30 @@ def _save_theme(mode):
         pass
 
 
-def _smooth(y, factor=6, sigma=1.3):
-    """Curva suave: interpola e aplica um filtro gaussiano (sem scipy)."""
+def _smooth(y, factor=8, sigma=1.0):
+    """Curva suave (sem scipy): filtro gaussiano leve nas amostras + spline Catmull-Rom,
+    que passa pelos pontos sem formar quinas. Retorna (x, y) com x em índices de amostra."""
     y = np.asarray(y, dtype=float)
     n = len(y)
-    xs = np.linspace(0, n - 1, (n - 1) * factor + 1)
-    ys = np.interp(xs, np.arange(n), y)
-    s = sigma * factor
-    r = int(3 * s)
-    k = np.exp(-0.5 * (np.arange(-r, r + 1) / s) ** 2)
-    k /= k.sum()
-    ys = np.convolve(np.pad(ys, r, mode="edge"), k, mode="valid")
-    return xs, ys
+    if sigma > 0:
+        r = int(3 * sigma) + 1
+        k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+        y = np.convolve(np.pad(y, r, mode="edge"), k / k.sum(), mode="valid")
+
+    p = np.pad(y, 1, mode="edge")
+    p0, p1, p2, p3 = p[:-3], p[1:-2], p[2:-1], p[3:]
+    t = np.linspace(0, 1, factor, endpoint=False)[:, None]
+    seg = 0.5 * (2 * p1 + (p2 - p0) * t
+                 + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2
+                 + (3 * p1 - p0 - 3 * p2 + p3) * t ** 3)
+    xs = (np.arange(n - 1)[:, None] + t.T).ravel()
+    return np.append(xs, n - 1), np.append(seg.T.ravel(), y[-1])
+
+
+def _ease(p):
+    """Suaviza o início e o fim do deslizamento (smoothstep)."""
+    p = min(max(p, 0.0), 1.0)
+    return p * p * (3 - 2 * p)
 
 
 ctk.set_appearance_mode(_load_theme())
@@ -511,6 +523,8 @@ class EEGApp(ctk.CTk):
         self.set_connected(True)
         self._refresh()
 
+    FRAME_MS = 33   # ~30 fps para o gráfico deslizar sem trancos
+
     def _build_chart(self, parent):
         fig, ax = plt.subplots(figsize=(9, 4.5), dpi=100)
         fig.subplots_adjust(left=0.01, right=0.99, top=0.97, bottom=0.03)
@@ -522,8 +536,18 @@ class EEGApp(ctk.CTk):
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-        self._chart = {"fig": fig, "ax": ax, "fill": None, "y": [0.0] * HISTORY}
-        self._chart["line"], = ax.plot([], [], linewidth=2.2, solid_capstyle="round", zorder=3)
+        zeros = [0.0] * HISTORY
+        self._chart = {
+            "fig": fig, "ax": ax,
+            "hist": zeros,                 # último histórico lido do buffer
+            "series": [0.0] + zeros,       # histórico + 1 ponto à esquerda (sai da tela)
+            "count": None,                 # contador de amostras do buffer
+            "t_new": 0.0,                  # quando chegou a última amostra
+            "interval": 1.0,               # intervalo médio entre amostras (s)
+        }
+        self._chart["line"], = ax.plot([], [], linewidth=2.4, solid_capstyle="round",
+                                       solid_joinstyle="round", antialiased=True, zorder=3)
+        self._chart["fill"], = ax.fill([0, 1], [0, 0], linewidth=0, zorder=2)
 
         canvas = FigureCanvasTkAgg(fig, master=parent)
         widget = canvas.get_tk_widget()
@@ -540,19 +564,45 @@ class EEGApp(ctk.CTk):
         ax.grid(axis="x", color=cur("grid"), linewidth=1)
         ax.grid(axis="y", visible=False)
         ch["line"].set_color(cur("accent"))
+        ch["fill"].set_facecolor(cur("accent"))
+        ch["fill"].set_alpha(0.22)
         ch["canvas"].get_tk_widget().configure(bg=cur("panel"))
-        self._draw_chart(ch["y"])
+        self._draw_chart_frame(force=True)
 
-    def _draw_chart(self, y):
+    def _feed_chart(self, hist, count):
+        """Registra uma nova leitura do buffer. Quando chega amostra nova, começa a
+        deslizar a curva um passo para a esquerda em vez de pular de uma vez."""
         ch = self._chart
-        ch["y"] = y
-        xs, ys = _smooth(y)
+        now = time.monotonic()
+        if count == ch["count"]:
+            return
+        if ch["count"] is not None and count == ch["count"] + 1:
+            dt = now - ch["t_new"]
+            ch["interval"] = 0.7 * ch["interval"] + 0.3 * min(max(dt, 0.1), 2.5)
+            ch["series"] = [ch["hist"][0]] + list(hist)
+            ch["t_new"] = now
+        else:
+            # primeira leitura ou várias amostras de uma vez: sem animação
+            ch["series"] = [hist[0]] + list(hist)
+            ch["t_new"] = now - 10.0
+        ch["hist"] = list(hist)
+        ch["count"] = count
+
+    def _draw_chart_frame(self, force=False):
+        ch = self._chart
+        p = _ease((time.monotonic() - ch["t_new"]) / ch["interval"])
+        if p >= 1.0 and ch.get("drawn_p") == 1.0 and not force:
+            return  # parado: nada mudou, não redesenha
+        ch["drawn_p"] = p
+
+        xs, ys = _smooth(ch["series"])
+        xs = xs - p                     # desliza: em p=1 a amostra nova chega à borda direita
         ys = np.clip(ys, 0, 100)
         ch["line"].set_data(xs, ys)
-        if ch["fill"] is not None:
-            ch["fill"].remove()
-        ch["fill"] = ch["ax"].fill_between(xs, ys, color=cur("accent"),
-                                           alpha=0.22, linewidth=0, zorder=2)
+        ch["fill"].set_xy(np.column_stack((
+            np.concatenate(([xs[0]], xs, [xs[-1]])),
+            np.concatenate(([0.0], ys, [0.0])),
+        )))
         ch["canvas"].draw_idle()
 
     # ── Loop de refresh — lê APENAS do buffer (mesmos dados do console) ──
@@ -560,30 +610,35 @@ class EEGApp(ctk.CTk):
         self._update_live_label()
         if not self._paused:
             snap = self.buffer.snapshot()
-            att = snap["attention"]   # = Att Filtrada do console
             hist = snap["att_hist"]
+            count = snap["count"]
+            new_sample = count != self._chart["count"]
+            self._feed_chart(hist, count)
+            self._draw_chart_frame()
 
-            self._draw_chart(hist)
-            self._value_label.configure(text=f"{round(att):d} / 100")
+            if new_sample:
+                att = snap["attention"]   # = Att Filtrada do console
+                self._value_label.configure(text=f"{round(att):d} / 100")
+                window = [v for v in hist if v > 0] or [0.0]
+                self._stats["now"].configure(text=f"{round(att):d}")
+                self._stats["avg"].configure(text=f"{round(sum(window) / len(window)):d}")
+                self._stats["peak"].configure(text=f"{round(max(window)):d}")
+                self.update_state(snap["state"], snap["blocked"])
 
-            window = [v for v in hist if v > 0] or [0.0]
-            self._stats["now"].configure(text=f"{round(att):d}")
-            self._stats["avg"].configure(text=f"{round(sum(window) / len(window)):d}")
-            self._stats["peak"].configure(text=f"{round(max(window)):d}")
-
-            self.update_state(snap["state"], snap["blocked"])
-
-        self.after(100, self._refresh)
+        self.after(self.FRAME_MS, self._refresh)
 
     def _update_live_label(self):
         secs = int(time.monotonic() - self._session_t0)
         clock = f"{secs // 60:02d}:{secs % 60:02d}"
         if not self._connected:
-            self._conn_label.configure(text=f"● desconectado · {clock}", text_color=C("danger"))
+            text, color = f"● desconectado · {clock}", "danger"
         elif self._paused:
-            self._conn_label.configure(text=f"● pausado · {clock}", text_color=C("dim"))
+            text, color = f"● pausado · {clock}", "dim"
         else:
-            self._conn_label.configure(text=f"● ao vivo · {clock}", text_color=C("accent"))
+            text, color = f"● ao vivo · {clock}", "accent"
+        if (text, color) != getattr(self, "_live_cache", None):
+            self._live_cache = (text, color)
+            self._conn_label.configure(text=text, text_color=C(color))
 
     def _toggle_pause(self):
         self._paused = not self._paused
