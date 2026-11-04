@@ -14,7 +14,7 @@ Como funciona:
 5. O estado (um caractere `A`–`E`) é enviado ao **Arduino** pelo módulo Bluetooth **HC-05**
    (9600 bps), que posiciona os cinco servos dos dedos.
 6. Uma interface gráfica (CustomTkinter + Matplotlib) mostra a atenção filtrada, o histórico e o
-   estado atual em tempo real.
+   estado atual em tempo real, com tema claro ou escuro.
 
 | Estado | Significado  |
 |--------|--------------|
@@ -59,7 +59,49 @@ O teste deve terminar com `RESULTADO: TUDO OK`.
 python main.py
 ```
 
-Na tela inicial, escolha a porta serial do Arduino (HC-05) e a do BrainLink e clique em **INICIAR**.
+Na tela inicial, escolha a porta serial do Arduino (HC-05) e a do BrainLink e clique em
+**Iniciar sessão**. Veja abaixo como funciona cada tela.
+
+## Interface
+
+A interface tem três telas. Todas têm um botão no canto superior direito para alternar entre
+o tema **claro** e o **escuro**; a escolha fica salva em `~/.icm_tema` e é usada da próxima vez
+que o programa abrir.
+
+### 1. Conectar dispositivos
+
+Escolha a porta serial do Arduino e a do BrainLink. O programa já pré-seleciona o **HC-05** para o
+Arduino e o **BrainLink** para o headset, se eles estiverem pareados. Se conectou um aparelho
+depois de abrir o programa, clique em **Atualizar portas**.
+
+| Escuro | Claro |
+|--------|-------|
+| ![Tela de conexão no tema escuro](docs/img/tela-portas_dark.png) | ![Tela de conexão no tema claro](docs/img/tela-portas_light.png) |
+
+### 2. Iniciando sessão
+
+Enquanto o programa conecta ao BrainLink e ao Arduino, esta tela mostra cada etapa. A conexão
+roda em segundo plano, então a janela não trava. Se alguma conexão falhar, a etapa fica vermelha
+com a mensagem de erro e o programa volta para a tela anterior, mantendo as portas escolhidas.
+
+| Escuro | Claro |
+|--------|-------|
+| ![Tela de carregamento no tema escuro](docs/img/tela-carregamento_dark.png) | ![Tela de carregamento no tema claro](docs/img/tela-carregamento_light.png) |
+
+### 3. Monitor de Atenção
+
+Mostra a atenção filtrada em tempo real (`X / 100`) e o histórico das últimas 120 leituras num
+gráfico que desliza de forma contínua, a 60 fps. Embaixo do gráfico ficam o nível atual, o pico,
+a média da janela e o estado atual (A–E). No topo ficam o tempo de sessão e os botões:
+
+- **Pausar / Retomar**: congela o gráfico e os valores na tela (a mão robótica continua recebendo os estados)
+- **Encerrar**: fecha o programa
+
+| Escuro | Claro |
+|--------|-------|
+| ![Monitor de atenção no tema escuro](docs/img/tela-painel_dark.png) | ![Monitor de atenção no tema claro](docs/img/tela-painel_light.png) |
+
+> As capturas foram feitas com dados simulados.
 
 ## Firmware
 
@@ -79,6 +121,8 @@ O código do Arduino está em `firmware/icm_firmware.ino`.
 │   └── state_enum.py             # enum State (A–E) com comparação de ordem
 ├── deps/
 │   └── BrainLinkParser.pyd       # SDK do BrainLink (baixar manualmente, não versionado)
+├── docs/
+│   └── img/                      # capturas das telas usadas neste README
 ├── firmware/
 │   └── icm_firmware.ino          # firmware do Arduino (servos)
 ├── src/
