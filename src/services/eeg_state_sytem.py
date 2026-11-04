@@ -53,11 +53,15 @@ class EEGSystem:
 
         self.brainlink.registrar_ouvinte(processar_bytes_brutos)
 
-    def _conectar_hardware(self, arduino_port, brainlink_port) -> tuple[bool, str]:
+    def _conectar_hardware(self, arduino_port, brainlink_port, progress=None) -> tuple[bool, str]:
         """Conecta ao BrainLink e Arduino.
         Retorna (sucesso, mensagem_de_erro).
+        `progress(etapa)` avisa a tela de carregamento ("brainlink", "arduino").
         """
+        progress = progress or (lambda etapa: None)
+
         # 1. Conexão do BrainLink (Obrigatória)
+        progress("brainlink")
         try:
             self.brainlink = BrainlinkAdapter(brainlink_port)
             if not self.brainlink.conectar():
@@ -66,6 +70,7 @@ class EEGSystem:
             return False, f"Erro ao conectar no BrainLink: {e}"
 
         # 2. Conexão do Arduino (Obrigatória)
+        progress("arduino")
         try:
             self.arduino = ArduinoAdapter(arduino_port)
             if not self.arduino.conectar():
@@ -90,16 +95,15 @@ class EEGSystem:
             pass
 
     def run(self):
-        def on_start(arduino_port, brainlink_port):
-            ok, mensagem_erro = self._conectar_hardware(arduino_port, brainlink_port)
+        # Roda em uma thread separada (a tela de carregamento fica animada enquanto conecta).
+        # Retorna (sucesso, mensagem); em caso de erro a UI volta para a tela de portas.
+        def on_start(arduino_port, brainlink_port, progress=None):
+            ok, mensagem_erro = self._conectar_hardware(arduino_port, brainlink_port, progress)
             if not ok:
-                # Se houver erro, mostra a mensagem na tela de pareamento
-                if self.app and self.app._current_frame:
-                    self.app.after(0, lambda: self.app._current_frame.set_error(mensagem_erro))
-                return False
+                return False, mensagem_erro
             self._registrar_parser()
             threading.Thread(target=self._loop_hardware, daemon=True).start()
-            return True
+            return True, ""
 
         self.app = EEGApp(on_start_callback=on_start)
         self.app.buffer = self.buffer
