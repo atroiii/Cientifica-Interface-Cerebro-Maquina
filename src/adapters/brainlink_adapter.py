@@ -27,3 +27,11 @@ class BrainlinkAdapter:
                 #Aqui mandamos a msg para outra parte do código essa Class tem somente a responsabilidade
                 #De fazer a conexão e manda para outra parte do código realizar a lógica
                 callback_funcao(msg)
+
+    def desconectar(self):
+        """Fecha a porta serial (para a thread de leitura e libera a porta COM)."""
+        if self.conexao:
+            try:
+                self.conexao.close()
+            finally:
+                self.conexao = None
