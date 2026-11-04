@@ -103,43 +103,6 @@ a média da janela e o estado atual (A–E). No topo ficam o tempo de sessão e 
 
 > As capturas foram feitas com dados simulados.
 
-## Gerar o executável (.exe)
-
-Dá para transformar o programa num executável que abre com dois cliques, sem precisar ter o
-Python instalado no computador onde ele vai rodar. O executável precisa ser gerado **no Windows**,
-com o mesmo Python 3.11 do projeto e o SDK do BrainLink em `deps/BrainLinkParser.pyd`.
-
-1. Instale o PyInstaller (uma vez só):
-
-   ```bash
-   pip install -r requirements.txt pyinstaller
-   ```
-
-2. Gere o executável, na raiz do projeto:
-
-   ```bash
-   python build_exe.py
-   ```
-
-   O resultado fica em `dist/ICM-Monitor/`. Abra `ICM-Monitor.exe`. Para levar para outro
-   computador, copie a **pasta inteira** `dist/ICM-Monitor/`, porque o `.exe` usa os arquivos
-   que estão ao lado dele.
-
-Se preferir um **único arquivo** `dist/ICM-Monitor.exe`, mais fácil de copiar:
-
-```bash
-python build_exe.py --um-arquivo
-```
-
-Ele demora alguns segundos a mais para abrir, porque se descompacta a cada execução.
-
-> O executável inclui o SDK do BrainLink, que não tem licença de redistribuição. Use-o nos seus
-> próprios computadores e não publique o `.exe` (por exemplo, numa *release* do GitHub).
-
-Se o Windows Defender ou o SmartScreen avisar que o programa é desconhecido, é normal para
-executáveis feitos com PyInstaller que não são assinados digitalmente. Clique em
-**Mais informações → Executar assim mesmo**.
-
 ## Firmware
 
 O código do Arduino está em `firmware/icm_firmware.ino`.
@@ -153,10 +116,7 @@ O código do Arduino está em `firmware/icm_firmware.ino`.
 ```
 .
 ├── main.py                       # ponto de entrada
-├── build_exe.py                  # gera o executável (.exe) com o PyInstaller
 ├── requirements.txt
-├── assets/
-│   └── icone.ico                 # ícone do programa e da janela
 ├── core/
 │   └── state_enum.py             # enum State (A–E) com comparação de ordem
 ├── deps/
