@@ -650,6 +650,7 @@ class EEGApp(ctk.CTk):
         ch["hist"] = list(hist)
         ch["count"] = count
         ch["curve"] = _smooth(ch["series"])   # a curva só muda com amostra nova
+        ch["drawn_p"] = None   # dados novos: redesenha mesmo se a posição não mudou
 
     def _update_chart_data(self, force=False):
         """Posiciona a curva no instante atual. Retorna False se nada mudou."""
