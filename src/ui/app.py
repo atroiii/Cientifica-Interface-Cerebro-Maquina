@@ -1,6 +1,7 @@
 import inspect
 import os
 import queue
+import sys
 import threading
 import time
 
@@ -182,13 +183,47 @@ class EEGApp(ctk.CTk):
         return self._theme_btn
 
     def _toggle_theme(self):
+        if getattr(self, "_theme_switching", False):
+            return  # cliques repetidos durante a troca são ignorados
+        self._theme_switching = True
         mode = "light" if _mode() == "dark" else "dark"
-        ctk.set_appearance_mode(mode)
-        _save_theme(mode)
+        # resposta imediata no botão; o redesenho pesado vem no próximo quadro,
+        # assim o clique nunca parece "não ter pegado"
         if self._theme_btn is not None:
-            self._theme_btn.configure(text=self._theme_text())
-        if self._chart is not None:
-            self._style_chart()
+            self._theme_btn.configure(text="☾  Escuro" if mode == "light" else "☀  Claro")
+        self.after(16, lambda: self._apply_theme(mode))
+
+    def _apply_theme(self, mode):
+        try:
+            ctk.set_appearance_mode(mode)
+            if self._chart is not None:
+                self._style_chart()
+            _save_theme(mode)
+        finally:
+            self._theme_switching = False
+
+    def _windows_set_titlebar_color(self, color_mode):
+        """Substitui a versão do CustomTkinter, que no Windows ESCONDE a janela e a
+        maximiza de novo a cada troca de tema só para repintar a barra de título —
+        é isso que dava a sensação de travamento no painel. Aqui só a cor da barra
+        muda e a moldura é repintada, sem esconder a janela."""
+        if not sys.platform.startswith("win") or not getattr(self, "_window_exists", False):
+            return super()._windows_set_titlebar_color(color_mode)  # antes de abrir: comportamento original
+        try:
+            import ctypes
+            user32, dwmapi = ctypes.windll.user32, ctypes.windll.dwmapi
+            hwnd = user32.GetParent(self.winfo_id())
+            value = ctypes.c_int(1 if color_mode.lower() == "dark" else 0)
+            for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (atual / antes do Windows 10 20H1)
+                if dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value),
+                                                ctypes.sizeof(value)) == 0:
+                    break
+            # SWP_NOSIZE | NOMOVE | NOZORDER | NOACTIVATE | FRAMECHANGED: recalcula só a moldura
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+            # RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW: repinta a barra de título já
+            user32.RedrawWindow(hwnd, None, None, 0x0001 | 0x0400 | 0x0100)
+        except Exception:  # noqa: BLE001 — na pior hipótese a barra só muda de cor depois
+            pass
 
     # ── Tela 1: seleção de portas ─────────────────────────────────────────
     def _show_port_selector(self, error=""):
