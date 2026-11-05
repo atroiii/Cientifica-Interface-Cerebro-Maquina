@@ -34,7 +34,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logica_icm import RAIZ, MaquinaReal, pacote_para_comando  # noqa: E402  (também põe a raiz no sys.path)
+from logica_icm import RAIZ, MaquinaRealV2, pacote_para_comando  # noqa: E402  (também põe a raiz no sys.path)
 
 from deps.BrainLinkParser import BrainLinkParser                  # noqa: E402  mesmo import de eeg_state_sytem.py
 from src.adapters.brainlink_adapter import BrainlinkAdapter       # noqa: E402
@@ -65,7 +65,7 @@ def main():
     w = csv.DictWriter(f, fieldnames=CAMPOS)
     w.writeheader()
 
-    maquina = MaquinaReal()          # alpha do código (0,50), y inicial 0
+    maquina = MaquinaRealV2()        # lógica v2: alpha do código (0,50), y inicial = 1ª leitura válida
     lock = threading.Lock()
     linhas = []
     t_ini = [None]
