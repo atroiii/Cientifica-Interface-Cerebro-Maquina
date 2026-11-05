@@ -1,159 +1,143 @@
 # Ensaios de bancada – Interface Cérebro-Máquina (sem participantes humanos)
 
-Tudo nesta pasta é novo. O código original **não foi alterado**. A única exceção é a linha
-pedida no firmware (`case 'T'`, Parte 2), que só responde a um caractere que o software nunca envia.
+Versão da lógica descrita aqui: **v2** (tag `v1.0-artigo`). A lógica anterior (v1) está preservada em
+`ensaios/legado/` só para comparação. Os números de linha abaixo referem-se à v2.
 Números que dependem de hardware estão marcados como **a medir**.
 
 | Arquivo | Conteúdo |
 |---|---|
-| `logica_icm.py` | Lógica isolada: importa `EEGStateMachine` sem modificação + lógicas de comparação |
+| `logica_icm.py` | Lógica isolada: importa a `EEGStateMachine` atual (v2) e a v1 preservada, e define as lógicas de comparação |
+| `legado/eeg_state_machine_v1.py` | Cópia literal de `src/services/eeg_state_machine.py` no commit `5fca7f5` (v1) |
 | `ensaio1_sintetico.py` | Parte 1 – sinal sintético (roda sem hardware) |
 | `ensaio2_latencia.py` | Parte 2 – latência PC ↔ HC-05 ↔ Arduino (**a medir**) |
 | `ensaio3_4_headset.py` | Parte 3 – qualidade de sinal e taxa de atualização do BrainLink (**a medir**) |
 | `resultados/` | CSV, tabelas Markdown e figuras do ensaio 1 |
 
+Testes automatizados da máquina de estados: `tests/test_eeg_state_machine.py` (`python -m pytest`,
+100 testes).
+
 ### De onde veio cada trecho de lógica usado nos ensaios
 
 | Trecho nos ensaios | Origem no repositório | Como |
 |---|---|---|
-| `MaquinaReal` | `src/services/eeg_state_machine.py` (classe inteira, linhas 3-67) | **importada**, sem cópia |
-| `pacote_para_comando` | `src/services/eeg_state_sytem.py`, `_on_eeg`, linhas 20-28 | reproduzida (3 linhas: descarta `attention == 0`, chama `processar`, envia) |
-| `ema` | `eeg_state_machine.py`, linha 13 (`_filtro_passa_baixa`) | reproduzida; só é usada nas lógicas de comparação |
-| `MaquinaRealSemBloqueado` | `eeg_state_machine.py`, linhas 16-60 | cópia literal **sem** as linhas de `bloqueado` (8, 24, 54, 59), para provar que essa variável não tem efeito |
+| `MaquinaRealV2` | `src/services/eeg_state_machine.py` (classe inteira) | **importada**, sem cópia |
+| `MaquinaRealV1` | `ensaios/legado/eeg_state_machine_v1.py` = mesmo arquivo no commit `5fca7f5` | **importada** da cópia literal |
+| `pacote_para_comando` | `src/services/eeg_state_sytem.py`, `_on_eeg`, linhas 20-28 | reproduzida (descarta `attention == 0`, chama `processar`, envia) |
+| `FiltroIniciado` | `eeg_state_machine.py`, linhas 11-12 e 51-59 (filtro da v2) | reproduzido; só é usado pelas lógicas de comparação, para que tenham o mesmo filtro da v2 |
+| `V1SemBloqueado` | `legado/eeg_state_machine_v1.py`, linhas 16-60 | cópia sem as linhas de `bloqueado`; justifica a remoção (verificação 1) |
 | `FaixasSemTrava`, `HistereseClassica` | — | **não existem no projeto**: são referências de comparação |
-| Leitura do headset (ensaio 3) | `src/adapters/brainlink_adapter.py` + `eeg_state_sytem.py`, linhas 45-54 | `BrainlinkAdapter` e `BrainLinkParser` **importados**; o callback de leitura é reproduzido |
+| Leitura do headset (ensaio 3) | `src/adapters/brainlink_adapter.py` + `eeg_state_sytem.py`, linhas 43-52 | `BrainlinkAdapter` e `BrainLinkParser` **importados**; o callback de leitura é reproduzido |
 | Porta do HC-05 (ensaio 2) | `src/adapters/arduino_adapter.py`, linha 12 | mesmos parâmetros (9600 bps) |
 
 ---
 
-## Parte 0 – Lógica real (lida do código)
+## Parte 0 – Lógica real (v2, lida do código)
 
 ### 1. Valor de α e valor inicial de y
 
-- **α = 0,50.** É o padrão do construtor (`eeg_state_machine.py:4`, `def __init__(self, alpha=0.50)`).
-  `EEGSystem` instancia sem argumento (`eeg_state_sytem.py:15`, `EEGStateMachine()`).
-- **y inicial = 0** (`eeg_state_machine.py:6`, `self.att_filtrado = 0`).
-- Fórmula (`eeg_state_machine.py:13`): `y ← α·x + (1−α)·y_anterior`, aplicada uma vez por pacote
-  com atenção ≠ 0.
-- Consequência medida: como y parte de 0, o primeiro valor filtrado é α·x. Com α = 0,5 e x ≥ 40,
-  isso dá y ≥ 20, e o gesto A não aparece. Com α ≤ 0,3, a mão **passa por A ao ligar**
-  (`resultados/ensaio1_partida.md`). Exemplo: com α = 0,1 e atenção constante em 42, são 11 s em A.
+- **α = 0,50** (`eeg_state_machine.py:4`, `def __init__(self, alpha=0.50)`). `EEGSystem` instancia
+  sem argumento (`eeg_state_sytem.py:15`).
+- **y inicial = primeira leitura válida.** No primeiro pacote com atenção ≠ 0, y recebe a própria
+  leitura, sem EMA (`eeg_state_machine.py:52-57`). Daí em diante:
+  `y ← α·x + (1−α)·y_anterior` (`eeg_state_machine.py:12` e `:59`).
+- Os pacotes com atenção 0 já são descartados antes da máquina (`eeg_state_sytem.py:20-21`). A
+  própria máquina também ignora um 0 enquanto não foi inicializada (`eeg_state_machine.py:54-55`).
 
 ### 2. Envio a cada pacote ou só na mudança?
 
-**A cada pacote.** `_on_eeg` (`eeg_state_sytem.py:19-30`) chama `self.arduino.enviar_estado(novo_estado.value)`
-sempre que `data.attention != 0`. Não há comparação com o estado anterior. A taxa de comandos é,
-portanto, igual à taxa de pacotes de atenção não nulos (≈ 60 comandos/min a 1 Hz). No firmware,
-repetir o mesmo caractere reescreve os mesmos ângulos (`Servo.write` com o valor atual), sem movimento.
+**A cada pacote** (sem mudança na v2). `_on_eeg` (`eeg_state_sytem.py:19-28`) chama
+`self.arduino.enviar_estado(novo_estado.value)` sempre que `data.attention != 0`, sem comparar com o
+estado anterior. Isso dá ≈ 60 comandos/min a 1 Hz. No firmware, repetir o mesmo caractere reescreve os
+mesmos ângulos, sem movimento.
 
 ### 3. Qualidade de sinal (signal/poorSignal)
 
-**Não é usada.** O único campo lido do objeto do SDK é `data.attention` (`eeg_state_sytem.py:20` e `:23`).
-O SDK expõe o atributo `signal` em `BrainLinkData` (README de
+**Não é usada** (sem mudança na v2). O único campo lido do objeto do SDK é `data.attention`
+(`eeg_state_sytem.py:20` e `:23`). O SDK expõe o atributo `signal` em `BrainLinkData` (README de
 `github.com/Macrotellect/BrainLinkParser-Python`), mas o README não documenta a faixa nem o
-significado desse campo. O único "portão" existente é `if data.attention == 0: return`
-(`eeg_state_sytem.py:20-21`): o pacote é descartado (não atualiza o filtro nem envia comando).
-O ensaio 3 registra o `signal` e a atenção juntos. Assim dá para verificar se a atenção vale 0 quando o
-headset está fora da cabeça (**a medir**).
+significado desse campo. O único "portão" é `if data.attention == 0: return`. O ensaio 3 registra o
+`signal` junto da atenção (**a medir**).
 
 Observação lateral: o projeto abre o BrainLink a 57600 bps (`brainlink_adapter.py:11`). O exemplo do
-README do SDK usa 115200. Em portas Bluetooth SPP a velocidade costuma ser ignorada, mas vale citar no artigo.
+README do SDK usa 115200. Em portas Bluetooth SPP a velocidade costuma ser ignorada, mas vale citar.
 
-### 4. Como funciona a "trava"
+### 4. Lógica de estados e "trava"
 
-A lógica **não é um classificador por faixas**. É uma máquina de estados (`_transicao`,
-`eeg_state_machine.py:16-60`). O limiar depende do estado atual, e cada pacote avalia só o
-`case` do estado corrente (no máximo 1 transição por pacote).
+A lógica é uma máquina de estados (`_transicao`, `eeg_state_machine.py:16-48`): o limiar depende do
+estado atual, e cada pacote avalia só o `case` do estado corrente (no máximo 1 transição por pacote).
+Não há variável de trava. A "trava" é a **histerese assimétrica**: C, D e E ficam retidos até y < 33
+e então voltam para B.
 
-**Pseudocódigo fiel** (y = atenção filtrada; estado inicial B; `piso` inicial B; `bloqueado` inicial falso):
+**Pseudocódigo fiel** (estado inicial B):
 
 ```
 a cada pacote x:
     se x == 0: ignorar pacote                         # eeg_state_sytem.py:20
-    y ← 0,5·x + 0,5·y                                 # linha 13
-    conforme estado:
-      A: se y ≥ 30 → B                                # linhas 18-20
-      B: piso ← B; bloqueado ← falso                  # linhas 23-24 (executa em TODO pacote em B)
-         se y < 20 → A
-         senão se y ≥ 85 → E (piso ← E)
-         senão se y ≥ 75 → D (piso ← D)
-         senão se y ≥ 65 → C (piso ← C)
-      C: se y ≥ 80 → E (piso ← E)                     # atenção: 80, não 85
-         senão se y ≥ 75 → D (piso ← D)
-         senão se y < 33 → B                          # sem bloqueado
-      D: se y ≥ 85 → E (piso ← E)
-         senão se y < 33 e piso ≤ D → B; bloqueado ← verdadeiro
-      E: se y < 33 e piso ≤ E → B; bloqueado ← verdadeiro
+    se o filtro não foi inicializado: y ← x           # eeg_state_machine.py:52-57
+    senão: y ← 0,5·x + 0,5·y                          # linha 59
+    conforme estado:                                  # linhas 16-48
+      A: se y ≥ 30 → B
+      B: se y < 20 → A
+         senão se y ≥ 85 → E
+         senão se y ≥ 75 → D
+         senão se y ≥ 65 → C
+      C: se y ≥ 85 → E
+         senão se y ≥ 75 → D
+         senão se y < 33 → B
+      D: se y ≥ 85 → E
+         senão se y < 33 → B
+      E: se y < 33 → B
     enviar caractere do estado ao Arduino             # eeg_state_sytem.py:28
 ```
 
 ```mermaid
 stateDiagram-v2
-    [*] --> B : y₀ = 0
+    [*] --> B : y = 1ª leitura válida
     B --> A : y < 20
     A --> B : y ≥ 30
     B --> C : 65 ≤ y < 75
     B --> D : 75 ≤ y < 85
     B --> E : y ≥ 85
-    C --> D : 75 ≤ y < 80
-    C --> E : y ≥ 80
+    C --> D : 75 ≤ y < 85
+    C --> E : y ≥ 85
     D --> E : y ≥ 85
     C --> B : y < 33
-    D --> B : y < 33 [bloqueado = true]
-    E --> B : y < 33 [bloqueado = true]
-    note right of B
-        Ao processar QUALQUER pacote em B:
-        bloqueado = false, piso = B
-    end note
+    D --> B : y < 33
+    E --> B : y < 33
     note left of E
         Não existem E→D, E→C, D→C, nem C/D/E→A.
         C, D e E ficam retidos enquanto y ≥ 33.
     end note
 ```
 
-O que o código realmente faz:
+Consequências:
 
-- **A variável `bloqueado` não participa de nenhuma decisão.** Ela vira verdadeira na transição
-  D→B ou E→B (linhas 54 e 59) e volta a falso no pacote seguinte, porque todo pacote processado em B
-  executa `self.bloqueado = False` (linha 24) antes de testar os limiares. Ela só aparece no console
-  (`eeg_state_sytem.py:36`) e na interface (`src/ui/app.py:737`, sufixo "· bloqueado" por ~1 pacote).
-  Isso foi verificado numericamente: a lógica real e a cópia sem nenhuma linha de `bloqueado` deram
-  **0 diferenças em 93 000 pacotes** (todos os cenários do ensaio 1, todos os α).
-- **`piso` também não tem efeito.** Só se entra em D vindo de B ou C, e as duas transições fazem
-  `piso ← D`. Só se entra em E fazendo `piso ← E`. Logo, `piso ≤ D` em D e `piso ≤ E` em E são sempre
-  verdadeiros.
-- **O que de fato funciona como "trava" é a histerese assimétrica.** C, D e E só saem para B, e só
-  quando y < 33. Depois de entrar em C (y ≥ 65), a mão não volta a B enquanto y ≥ 33, e não desce de
-  E para D nem de D para C. A saída é sempre para B, e B→A exige outro pacote com y < 20.
-- **A "trava" vale para a faixa "até 20"?** Não. A transição A→B não mexe em `bloqueado`, e nada impede
-  E→B→A em pacotes consecutivos. Exemplo medido com sinal bruto: x = 90, 90, …, 10, 10 gera
-  `E, B, A` (A no 2º pacote após a queda). Com α = 0,5: `E, E, B, A`. O A tem histerese própria:
-  entra com y < 20 e sai com y ≥ 30.
-- **Subida contínua 50→90 (gestos D e E alcançáveis?)** E sempre é alcançado. D só é alcançado se
-  algum pacote cair com y em [75, 80) enquanto o estado é C, porque de C o código vai direto para E
-  com y ≥ 80, e não com 85. Resultado (`resultados/ensaio1_subida_50_90.md`, sem ruído):
+- **A "trava" vale para a faixa "até 20"?** Não. O A tem histerese própria (entra com y < 20, sai
+  com y ≥ 30), e nada impede E→B→A em pacotes consecutivos. Isso não mudou da v1 para a v2.
+- **Subida contínua 50→90:** com α = 0,5 (código), **D e E são alcançados em todas as velocidades
+  testadas** (degrau, 10, 5, 2, 1 e 0,5 pt/s: sempre B→C→D→E). Com α = 0,1–0,3 também.
+  A única exceção é o sinal **bruto em degrau** (50 → 90 num único pacote), que vai direto de B para
+  E. Isso é esperado: o salto atravessa 75–85 sem nenhuma amostra intermediária. Tabela completa:
+  `resultados/ensaio1_subida_50_90.md`.
+- **Descida:** C e D continuam **não** sendo emitidos. E fica retido até y < 33 e então vai para B.
+  Isso não mudou.
+- **Partida:** com primeira leitura ≥ 20, a v2 não passa por A
+  (`resultados/ensaio1_partida.md` e os testes `test_partida_sem_A_*`).
 
-  | Velocidade da subida | Bruto | α = 0,5 (código) |
-  |---|---|---|
-  | degrau 50→90 | B→E (**D pulado**, C também) | B→C→D→E |
-  | 10 pontos/s | B→C→E (**D pulado**) | B→C→E (**D pulado**) |
-  | ≤ 5 pontos/s | B→C→D→E | B→C→D→E |
+### 5. Limiares e mapeamento (v2)
 
-  Na descida, C e D **nunca** são emitidos: E fica retido até y < 33 e então vai para B.
-
-### 5. Limiares e mapeamento
-
-| Transição | Limiar (sobre y filtrado) | Linha |
+| Transição | Limiar (sobre y filtrado) | Linha (`eeg_state_machine.py`) |
 |---|---|---|
-| B → A | y < 20 | 25 |
+| B → A | y < 20 | 23 |
 | A → B | y ≥ 30 | 19 |
-| B → C | 65 ≤ y < 75 | 33 |
-| B → D | 75 ≤ y < 85 | 30 |
-| B → E | y ≥ 85 | 27 |
-| C → D | 75 ≤ y < 80 | 41 |
-| C → E | y ≥ 80 | 38 |
-| D → E | y ≥ 85 | 48 |
-| C, D, E → B | y < 33 | 44, 51, 57 |
+| B → C | 65 ≤ y < 75 | 29 |
+| B → D | 75 ≤ y < 85 | 27 |
+| B → E | y ≥ 85 | 25 |
+| C → D | 75 ≤ y < 85 | 35 |
+| C → E | y ≥ 85 | 33 |
+| D → E | y ≥ 85 | 41 |
+| C, D, E → B | y < 33 | 37, 43, 47 |
+| (início) | y ← 1ª leitura ≠ 0 | 52-57 |
 
 Mapeamento estado → caractere → postura (`core/state_enum.py`; `firmware/icm_firmware.ino`; significado do README):
 
@@ -165,8 +149,61 @@ Mapeamento estado → caractere → postura (`core/state_enum.py`; `firmware/icm
 | D | `D` | Foco alto | 0 | 0 | 0 | 180 | 180 |
 | E | `E` | Foco máximo | 0 | 0 | 180 | 180 | 0 |
 
-Só a partir de B as faixas coincidem com a leitura "A < 20 ≤ B < 65 ≤ C < 75 ≤ D < 85 ≤ E". Nos
-outros estados valem os limiares da tabela acima.
+Na v2, as subidas usam os mesmos limiares em qualquer estado (65/75/85). As descidas usam 33
+(C/D/E → B) e 20/30 para o A.
+
+---
+
+## Mudanças entre v1 e v2
+
+Commit das mudanças: `963f761`. A v1 é o commit `5fca7f5`.
+
+| # | Mudança | Por quê |
+|---|---|---|
+| 1 | C → E passa de y ≥ 80 para **y ≥ 85**; C → D vale para 75 ≤ y < 85 | Na v1, a partir de C o gesto D só existia em [75, 80), e numa subida moderada era pulado |
+| 2 | Removidas as variáveis `bloqueado` e `piso`, o "Bloqueado" do console e o sufixo "· bloqueado" da interface (e o campo `blocked` do `EEGBuffer`, que só alimentava esse sufixo) | Código morto: `bloqueado` nunca era lido numa decisão, e "piso ≤ D" / "piso ≤ E" eram sempre verdadeiras |
+| 3 | Filtro inicia com a primeira leitura válida, e não com y = 0 | Com y = 0, a v1 passava por A na partida |
+
+**Verificações de que nada mais mudou** (`ensaio1_sintetico.py`, sequências da repetição 0 de
+todos os cenários e as subidas 50→90, com todos os α):
+1. v1 × v1 sem `bloqueado`: **0 diferenças em 95 565 pacotes** (comando e valor filtrado).
+2. v1 (com o início de filtro da v2) × v2, em paralelo: **4 divergências, todas no caso pretendido**
+   (estado C com 80 ≤ y < 85: v1 → E, v2 → D) e **0 divergências por outro motivo, em 94 620 pacotes**.
+3. Testes pytest: os 100 passam na v2. Rodando a mesma suíte contra a v1, 41 falham, todos ligados
+   aos itens 1-3 da tabela.
+
+**Efeito medido** (lógica real, α = 0,5 do código, salvo indicação; média ± DP de 30 repetições):
+
+| Situação | v1 | v2 |
+|---|---|---|
+| Subida 50→90 a 10 pt/s, sem ruído | B→C→E (D pulado) | B→C→D→E |
+| Subida 50→90 a 10 pt/s, sinal bruto | B→C→E (D pulado) | B→C→D→E |
+| Rampa + σ = 5: repetições em que D foi alcançado | 97 % | 100 % |
+| Rampa + σ = 10: repetições em que D foi alcançado | 87 % | 100 % |
+| Rampa + σ = 5: espúrios/min | 0,34 ± 0,09 | 0,34 ± 0,09 |
+| Rampa + σ = 10: espúrios/min | 0,90 ± 0,20 | 0,91 ± 0,20 |
+| Oscilação no limiar 84/85, σ = 3 / 5 / 10: espúrios/min | 0,14 / 0,16 / 0,15 | 0,04 / 0,05 / 0,09 |
+| Sinal constante 20 ou 25, sem ruído: segundos em A (de 60) | 60 | 0 |
+| Sinal constante 70 / 92, sem ruído: primeiros comandos | `BBBC…` / `BCE…` | `CCC…` / `EEE…` |
+| Patamar B (42) com ruído σ = 3 / 5 / 10: repetições com A nos primeiros 60 s | 30 % / 27 % / 43 % | 0 % / 0 % / 0 % |
+| Patamar E (92,5), σ = 5: atraso médio | 2,57 ± 0,73 s | 0,10 ± 0,31 s |
+
+Na rampa 0→100→0 as duas versões são praticamente iguais. A rampa começa em 0, então as duas
+partem de A, e a subida lenta (0,33 pt/s) sempre amostra a faixa 75–80.
+
+**Efeito colateral da v2 (medido, não corrigido).** A v2 inicia o filtro com **uma única** leitura.
+Com ruído, essa leitura pode cair numa faixa acima da do sinal, e C/D/E ficam retidos até y < 33.
+Nos patamares fixos (cenário d), isso aparece como entradas não atendidas:
+
+| Patamar (cenário d), α = 0,5 | σ = 3 | σ = 5 | σ = 10 |
+|---|---|---|---|
+| C (69,5), v1 → v2 | 0 % → 13 % | 0 % → 17 % | 7 % → 13 % |
+| D (79,5), v1 → v2 | 0 % → 3 % | 13 % → 27 % | 40 % → 40 % |
+
+Exemplo: no patamar D com σ = 5, em parte das repetições a 1ª leitura foi ≥ 85, a mão foi direto
+para E e lá ficou. Na v1 o filtro subia de 0 e atravessava a faixa D. É uma limitação a declarar no
+artigo. Uma alternativa seria iniciar o filtro com a média das primeiras N leituras, mas **isso não
+foi implementado nem medido**.
 
 ---
 
@@ -176,32 +213,35 @@ outros estados valem os limiares da tabela acima.
 python ensaios/ensaio1_sintetico.py
 ```
 
-(≈ 30 s; precisa de numpy e matplotlib, já listados em `requirements.txt`; não precisa do SDK.)
+(≈ 45 s; precisa de numpy e matplotlib, já listados em `requirements.txt`; não precisa do SDK.)
 
-**Método.** O sinal é gerado a 1 Hz por 600 s, com semente 20261105 e 30 repetições por cenário. O ruído é
-gaussiano, somado ao sinal limpo, arredondado para inteiro e saturado em [0, 100]. Pacotes iguais a 0
-são descartados, como no código. A mesma realização de ruído alimenta todas as configurações
-(comparação pareada).
+**Método** (igual ao da primeira rodada). O sinal é gerado a 1 Hz por 600 s, com semente 20261105
+e 30 repetições por cenário. O ruído é gaussiano, somado ao sinal limpo, arredondado para inteiro e
+saturado em [0, 100]. Pacotes iguais a 0 são descartados, como no código. A mesma realização de
+ruído alimenta todas as configurações (comparação pareada).
 
 - (a) rampa 0→100→0 (300 s subindo, 300 s descendo), sem ruído;
 - (b) a mesma rampa com σ = 3, 5 e 10;
 - (c) senoide de amplitude ±5 e período 60 s (fase aleatória) centrada em 20, 64,5, 74,5 e 84,5, com σ = 3, 5 e 10;
 - (d) patamar fixo em 10, 42, 69,5, 79,5 e 92,5 (centro de cada faixa nominal), com σ = 3, 5 e 10.
 
-**Configurações (15).** Três lógicas × cinco filtros (bruto = α 1,0; α = 0,1, 0,2, 0,3 e 0,5, que é o do código):
-- `real`: a lógica do projeto (importada). Como `bloqueado` não tem efeito (Parte 0, item 4),
-  a lógica real "com trava" e "sem a variável de trava" são idênticas.
+**Configurações (20).** Quatro lógicas × cinco filtros (bruto = α 1,0; α = 0,1, 0,2, 0,3 e 0,5, que é o do código):
+- `real_v2`: a lógica atual do projeto (importada). **Principal.**
+- `real_v1`: a lógica antiga (importada de `ensaios/legado/`), com y inicial = 0.
 - `faixas_sem_trava`: faixa nominal 20/65/75/85 do valor filtrado, sem memória. É a lógica "sem trava".
 - `histerese_3`: limiares nominais com histerese clássica: sobe com L+3, desce com L−3.
 
-**Métricas** (média ± desvio-padrão das 30 repetições):
+As duas lógicas de comparação usam **o mesmo filtro da v2** (início na primeira leitura válida).
+Na primeira rodada elas usavam y₀ = 0, como a v1. Isso muda só o comportamento delas na partida.
+
+**Métricas** (mesmas da primeira rodada; média ± desvio-padrão das 30 repetições):
 - *Comandos/min*: caracteres enviados (todas as lógicas usam a política do código: um por pacote).
 - *Trocas/min*: mudanças de gesto (seria a taxa de comandos se o envio fosse só na mudança).
 - *Espúrios/min*: troca para o gesto G que não corresponde a uma entrada do sinal sem ruído
   (quantizado) na faixa nominal G. Cada entrada do sinal limpo em G legitima **uma** troca para G,
   desde o instante da entrada até 10 s depois que o sinal limpo sai de G. Uma troca **antecipada**
   (antes de o sinal limpo entrar na faixa) conta como espúria. Também é dada a mesma métrica só para
-  t ≥ 60 s, excluindo o transitório de partida causado por y₀ = 0.
+  t ≥ 60 s.
 - *Atraso*: tempo entre o sinal limpo entrar na faixa G e o primeiro comando G (dentro da mesma
   janela). *Entradas não atendidas*: % das entradas do sinal limpo sem nenhum comando G nessa janela.
 - *Gestos alcançados*: % das repetições em que cada gesto foi emitido ao menos uma vez.
@@ -210,13 +250,18 @@ são descartados, como no código. A mesma realização de ruído alimenta todas
 
 | Lógica | Filtro | Comandos/min | Trocas/min | Espúrios/min | Espúrios/min (t ≥ 60 s) | Atraso médio (s) | Entradas não atendidas (%) | Gestos alcançados (% das rep.) |
 |---|---|---|---|---|---|---|---|---|
-| real | bruto | 58.70 ± 0.29 | 1.26 ± 0.30 | 0.96 ± 0.31 | 1.02 ± 0.33 | 12.75 ± 1.66 | 25 | A:100 B:100 C:100 D:90 E:100 |
-| real | α=0.1 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.00 ± 0.00 | 0.00 ± 0.00 | 26.41 ± 1.27 | 22 | A:100 B:100 C:100 D:100 E:100 |
-| real | α=0.2 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.07 ± 0.07 | 0.08 ± 0.08 | 20.51 ± 1.20 | 22 | A:100 B:100 C:100 D:100 E:100 |
-| real | α=0.3 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.19 ± 0.10 | 0.21 ± 0.11 | 18.51 ± 0.77 | 22 | A:100 B:100 C:100 D:100 E:100 |
-| real | α=0.5 (código) | 58.70 ± 0.29 | 0.71 ± 0.05 | 0.34 ± 0.09 | 0.37 ± 0.10 | 16.09 ± 1.40 | 23 | A:100 B:100 C:100 D:97 E:100 |
+| real_v2 | bruto | 58.70 ± 0.29 | 1.27 ± 0.31 | 0.97 ± 0.31 | 1.03 ± 0.34 | 12.60 ± 1.45 | 24 | A:100 B:100 C:100 D:100 E:100 |
+| real_v2 | α=0.1 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.00 ± 0.00 | 0.00 ± 0.00 | 26.41 ± 1.27 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v2 | α=0.2 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.07 ± 0.07 | 0.08 ± 0.08 | 20.51 ± 1.20 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v2 | α=0.3 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.19 ± 0.10 | 0.21 ± 0.11 | 18.51 ± 0.77 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v2 | α=0.5 (código) | 58.70 ± 0.29 | 0.71 ± 0.05 | 0.34 ± 0.09 | 0.37 ± 0.10 | 15.99 ± 1.20 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v1 | bruto | 58.70 ± 0.29 | 1.26 ± 0.30 | 0.96 ± 0.31 | 1.02 ± 0.33 | 12.75 ± 1.66 | 25 | A:100 B:100 C:100 D:90 E:100 |
+| real_v1 | α=0.1 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.00 ± 0.00 | 0.00 ± 0.00 | 26.41 ± 1.27 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v1 | α=0.2 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.07 ± 0.07 | 0.08 ± 0.08 | 20.51 ± 1.20 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v1 | α=0.3 | 58.70 ± 0.29 | 0.70 ± 0.00 | 0.19 ± 0.10 | 0.21 ± 0.11 | 18.51 ± 0.77 | 22 | A:100 B:100 C:100 D:100 E:100 |
+| real_v1 | α=0.5 (código) | 58.70 ± 0.29 | 0.71 ± 0.05 | 0.34 ± 0.09 | 0.37 ± 0.10 | 16.09 ± 1.40 | 23 | A:100 B:100 C:100 D:97 E:100 |
 | faixas_sem_trava | bruto | 58.70 ± 0.29 | 13.18 ± 0.95 | 12.28 ± 0.95 | 12.78 ± 0.97 | 0.91 ± 0.38 | 0 | A:100 B:100 C:100 D:100 E:100 |
-| faixas_sem_trava | α=0.1 | 58.70 ± 0.29 | 1.27 ± 0.30 | 0.37 ± 0.30 | 0.41 ± 0.33 | 7.89 ± 1.19 | 0 | A:100 B:100 C:100 D:100 E:100 |
+| faixas_sem_trava | α=0.1 | 58.70 ± 0.29 | 1.27 ± 0.30 | 0.38 ± 0.30 | 0.42 ± 0.33 | 7.88 ± 1.19 | 0 | A:100 B:100 C:100 D:100 E:100 |
 | faixas_sem_trava | α=0.2 | 58.70 ± 0.29 | 2.28 ± 0.47 | 1.40 ± 0.45 | 1.54 ± 0.49 | 2.87 ± 0.81 | 0 | A:100 B:100 C:100 D:100 E:100 |
 | faixas_sem_trava | α=0.3 | 58.70 ± 0.29 | 3.28 ± 0.65 | 2.39 ± 0.65 | 2.54 ± 0.71 | 1.89 ± 0.68 | 0 | A:100 B:100 C:100 D:100 E:100 |
 | faixas_sem_trava | α=0.5 (código) | 58.70 ± 0.29 | 5.63 ± 0.71 | 4.74 ± 0.70 | 4.99 ± 0.74 | 1.33 ± 0.56 | 0 | A:100 B:100 C:100 D:100 E:100 |
@@ -228,7 +273,7 @@ são descartados, como no código. A mesma realização de ruído alimenta todas
 
 O sinal ideal (rampa limpa) tem 0,9 trocas/min (A→B→C→D→E→D→C→B→A).
 
-### Rampa sem ruído (cenário a) – lógica real
+### Rampa sem ruído (cenário a) – real_v2
 
 | Filtro | Gestos alcançados | Atraso A / B / C / D / E (s) | Entradas não atendidas |
 |---|---|---|---|
@@ -238,46 +283,57 @@ O sinal ideal (rampa limpa) tem 0,9 trocas/min (A→B→C→D→E→D→C→B→
 | α = 0,3 | A B C D E (100 %) | 1,5 / 65,5 / 4 / 4 / 4 | 22 % |
 | α = 0,5 (código) | A B C D E (100 %) | 1,0 / 64,5 / 3 / 3 / 3 | 22 % |
 
-Na rampa sem ruído, todos os gestos são alcançados na **subida**. Na **descida**, a lógica real nunca
-emite D nem C. O atraso de B (~64 s com α = 0,5) é o tempo que o sinal leva para descer de 64 até 33
-a 0,33 pt/s. Não é latência de processamento: é consequência da retenção de C/D/E até y < 33.
+Esses valores são idênticos aos da v1 neste cenário. Na descida, a v2 não emite D nem C. O atraso de
+B (~64 s com α = 0,5) é o tempo que o sinal leva para descer de 64 até 33 a 0,33 pt/s. Não é
+latência de processamento: é consequência da retenção de C/D/E até y < 33.
 
-### Principais observações (todas do ensaio sintético)
+### Partida (real_v2, sinal constante sem ruído)
+
+| Sinal constante | Primeiros 15 comandos, α = 0,5 | Segundos em A (de 60), qualquer α testado |
+|---|---|---|
+| 19 | `AAAAAAAAAAAAAAA` | 60 (correto: está na faixa A) |
+| 20 | `BBBBBBBBBBBBBBB` | 0 |
+| 25 | `BBBBBBBBBBBBBBB` | 0 |
+| 42 | `BBBBBBBBBBBBBBB` | 0 |
+| 70 | `CCCCCCCCCCCCCCC` | 0 |
+| 92 | `EEEEEEEEEEEEEEE` | 0 |
+
+Tabela completa (v1 e v2, os cinco filtros e o cenário d com ruído): `resultados/ensaio1_partida.md`.
+
+### Principais observações (todas do ensaio sintético, lógica real_v2)
 
 1. **Comandos/min ≈ 57–60 em todas as configurações**, porque o código envia a cada pacote.
    A taxa só cai quando o ruído gera pacotes iguais a 0, que são descartados: 49,7/min no patamar
-   em 10 com σ = 10. As trocas
-   de gesto efetivas da lógica real ficam em 0,70–0,71/min na rampa com σ ≤ 5, contra 0,9/min do
-   sinal ideal (C e D não aparecem na descida).
-2. **Ruído vs. filtro.** Com σ = 5 e α = 0,5 (código), a lógica real tem 0,34 ± 0,09 espúrios/min.
+   em 10 com σ = 10. As trocas de gesto efetivas ficam em 0,70–0,71/min na rampa com σ ≤ 5, contra
+   0,9/min do sinal ideal (C e D não aparecem na descida).
+2. **Ruído vs. filtro.** Com σ = 5 e α = 0,5, a real_v2 tem 0,34 ± 0,09 espúrios/min.
    Sem memória (`faixas_sem_trava`) são 4,74 ± 0,70, e com histerese de ±3 são 0,60 ± 0,27.
-   Com σ = 10: 0,90 ± 0,20 (real), 10,13 ± 1,02 (sem trava) e 4,44 ± 0,58 (histerese ±3).
+   Com σ = 10: 0,91 ± 0,20 (real_v2), 10,13 ± 1,02 (sem trava) e 4,44 ± 0,58 (histerese ±3).
    Ver `resultados/fig3_espurios.png`.
-3. **Natureza dos espúrios da lógica real.** Na rampa com σ = 5 e α = 0,5, 86 dos 101 espúrios
-   (30 repetições) são **antecipações**: a troca para G ocorre até 15 s antes de o sinal limpo
-   entrar em G (mediana 7 s), perto dos limiares 20, 65, 75 e 85. Não há oscilação: as trocas/min
-   ficam em 0,71.
-4. **Custo da retenção.** A lógica real tem o maior atraso médio e 22–27 % das entradas de faixa
-   nunca atendidas (C e D na descida). A histerese ±3 com α = 0,2 obteve espúrios equivalentes
-   (0,01 ± 0,03/min) com 0 % de entradas não atendidas e atraso de 9,95 ± 1,64 s.
-5. **Limiar 20 (cenário c).** É o ponto mais sensível. Com σ = 10 e α = 0,5 há
-   2,29 ± 0,42 espúrios/min e 3,86 ± 0,49 trocas/min A↔B (`resultados/ensaio1_resumo.md`).
-6. **Partida.** Por causa de y₀ = 0, toda sessão com α ≤ 0,3 começa passando por A, e com α = 0,5
-   isso acontece quando a atenção inicial é < 40. No cenário (d), isso responde pela maior parte dos
-   espúrios em sinais constantes. Por isso a coluna "t ≥ 60 s" é apresentada à parte.
+3. **Natureza dos espúrios.** Na rampa com α = 0,5, a maioria dos espúrios da real_v2 são
+   **antecipações**: a troca para G ocorre até 15 s antes de o sinal limpo entrar em G. São 70 de 71
+   com σ = 3, 87 de 101 com σ = 5 e 61 de 274 com σ = 10 (30 repetições), com mediana de 4, 7 e
+   10 s (`resultados/ensaio1_antecipacoes.md`).
+4. **Custo da retenção.** A real_v2 tem o maior atraso médio, e 22 % das entradas de faixa na rampa
+   nunca são atendidas (C e D na descida). A histerese ±3 com α = 0,2 obteve espúrios equivalentes
+   (0,01 ± 0,03/min com σ = 5) com 0 % de entradas não atendidas e atraso de 9,95 ± 1,64 s.
+5. **Limiar 20 (cenário c).** É o ponto mais sensível. Com σ = 10 e α = 0,5 há 2,28 ± 0,42
+   espúrios/min e 3,84 ± 0,50 trocas/min (`resultados/ensaio1_resumo.md`).
+6. **D na subida.** Com a v2, D foi alcançado em 100 % das repetições da rampa com ruído
+   (σ = 3, 5 e 10, α = 0,5), contra 97 % e 87 % da v1 com σ = 5 e 10.
 
-Tabelas completas (a, b para cada σ, c para cada limiar e σ, d para cada faixa e σ, atraso por gesto):
-`resultados/ensaio1_resumo.md`. Dados brutos por repetição: `resultados/ensaio1.csv`
-(13 950 linhas; colunas `cenario, sigma, alvo, logica, alpha, filtro, rep, cmd_min, trocas_min,
-espurios_min, espurios_regime_min, atraso_s, entradas, entradas_nao_atendidas, gestos_emitidos,
-alcancou_A..E, atraso_A_s..atraso_E_s`).
+Tabelas completas (a, b para cada σ, c para cada limiar e σ, d para cada faixa e σ, atraso por gesto,
+as duas verificações): `resultados/ensaio1_resumo.md`. Dados brutos por repetição:
+`resultados/ensaio1.csv` (18 600 linhas; colunas `cenario, sigma, alvo, logica, alpha, filtro, rep,
+cmd_min, trocas_min, espurios_min, espurios_regime_min, atraso_s, entradas, entradas_nao_atendidas,
+gestos_emitidos, alcancou_A..E, atraso_A_s..atraso_E_s`).
 
-Figuras:
+Figuras (lógica real_v2):
 - `resultados/fig1_serie_temporal.png`: rampa + σ = 5, bruto, filtrado (α = 0,5), sinal limpo,
-  limiares nominais (linha cheia) e extras da máquina real (30, 33, 80, pontilhados), com o gesto
+  limiares nominais (linha cheia) e extras da máquina real (30 e 33, pontilhados), com o gesto
   enviado embaixo;
 - `resultados/fig2_rampa_limpa.png`: o mesmo, sem ruído (mostra a retenção de E na descida);
-- `resultados/fig3_espurios.png`: espúrios/min por configuração, σ = 3, 5 e 10.
+- `resultados/fig3_espurios.png`: espúrios/min das 20 configurações, σ = 3, 5 e 10.
 
 Limitações: o sinal sintético não reproduz a dinâmica real do eSense (autocorrelação, saturações,
 valores 0 por mau contato). Os números acima caracterizam a **lógica de decisão**, não o desempenho

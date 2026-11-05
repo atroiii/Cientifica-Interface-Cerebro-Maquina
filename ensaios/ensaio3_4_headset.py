@@ -11,7 +11,7 @@ Uso (da raiz do repositório, com o SDK em deps/ como no README):
 Mesmo caminho de dados do sistema real:
 - conexão: BrainlinkAdapter (src/adapters/brainlink_adapter.py), CushySerial a 57600 bps;
 - decodificação: BrainLinkParser(callback) e parser.parse(msg), como em
-  EEGSystem._registrar_parser (src/services/eeg_state_sytem.py, linhas 45-54);
+  EEGSystem._registrar_parser (src/services/eeg_state_sytem.py, linhas 43-52);
 - decisão: EEGStateMachine importada sem alteração; o portão "attention == 0 ->
   ignora" de EEGSystem._on_eeg (linhas 20-21) é reproduzido em
   ensaios/logica_icm.py::pacote_para_comando.
