@@ -2,16 +2,16 @@
 
 Versão da lógica descrita aqui: **v2** (tag `v1.0-artigo`). A lógica anterior (v1) está preservada em
 `ensaios/legado/` só para comparação. Os números de linha abaixo referem-se à v2.
-Números que dependem de hardware estão marcados como **a medir**.
+Os números que dependem de hardware (Partes 2 e 3) foram medidos em 04/11/2026.
 
 | Arquivo | Conteúdo |
 |---|---|
 | `logica_icm.py` | Lógica isolada: importa a `EEGStateMachine` atual (v2) e a v1 preservada, e define as lógicas de comparação |
 | `legado/eeg_state_machine_v1.py` | Cópia literal de `src/services/eeg_state_machine.py` no commit `5fca7f5` (v1) |
 | `ensaio1_sintetico.py` | Parte 1 – sinal sintético (roda sem hardware) |
-| `ensaio2_latencia.py` | Parte 2 – latência PC ↔ HC-05 ↔ Arduino (**a medir**) |
-| `ensaio3_4_headset.py` | Parte 3 – qualidade de sinal e taxa de atualização do BrainLink (**a medir**) |
-| `resultados/` | CSV, tabelas Markdown e figuras do ensaio 1 |
+| `ensaio2_latencia.py` | Parte 2 – latência PC ↔ Arduino (medida via HC-05 e via USB) |
+| `ensaio3_4_headset.py` | Parte 3 – qualidade de sinal e taxa de atualização do BrainLink (medido) |
+| `resultados/` | CSV, tabelas Markdown e figuras do ensaio 1; CSV dos ensaios 2, 3 e 4 |
 
 Testes automatizados da máquina de estados: `tests/test_eeg_state_machine.py` (`python -m pytest`,
 100 testes).
@@ -56,7 +56,7 @@ mesmos ângulos, sem movimento.
 (`eeg_state_sytem.py:20` e `:23`). O SDK expõe o atributo `signal` em `BrainLinkData` (README de
 `github.com/Macrotellect/BrainLinkParser-Python`), mas o README não documenta a faixa nem o
 significado desse campo. O único "portão" é `if data.attention == 0: return`. O ensaio 3 registra o
-`signal` junto da atenção (**a medir**).
+`signal` junto da atenção (resultados na Parte 3).
 
 Observação lateral: o projeto abre o BrainLink a 57600 bps (`brainlink_adapter.py:11`). O exemplo do
 README do SDK usa 115200. Em portas Bluetooth SPP a velocidade costuma ser ignorada, mas vale citar.
@@ -342,7 +342,7 @@ script). Antecipações contam como espúrias.
 
 ---
 
-## Parte 2 – Latência (a medir)
+## Parte 2 – Latência (medido)
 
 **Firmware.** Foi adicionado em `firmware/icm_firmware.ino`, dentro do `switch`, antes do `default`:
 
@@ -371,18 +371,47 @@ hardware: `--porta loop://` (eco do próprio pyserial).
 **Saída:** `ensaios/resultados/ensaio2_<data>.csv` (`i, t_envio_s, rtt_ms, resposta, perdida`). No
 terminal: RTT médio, desvio-padrão, mínimo, máximo, mediana e % de respostas perdidas (timeout 1 s).
 
-| Métrica | Valor |
-|---|---|
-| RTT médio ± DP (ms) | a medir |
-| Mínimo / máximo (ms) | a medir |
-| Respostas perdidas (%) | a medir |
+**Referência pelo cabo USB (COM7, Arduino Uno com conversor CH340).** Na primeira tentativa o HC-05
+(COM8) não conectou (o Windows deu "tempo limite do semáforo expirou" ao abrir a porta). Ele foi então
+desconectado dos pinos 0/1 para a gravação do firmware com o `case 'T'` (via `arduino-cli`, placa
+`arduino:avr:uno`), e a latência foi medida primeiro pelo USB. Esses números são um **piso**:
+PC → USB-serial → laço do Arduino → volta, sem o enlace Bluetooth SPP. A medida pelo HC-05 vem logo
+depois.
+
+3 rodadas × 200 envios, timeout 1 s, 0,1 s entre envios, 3 s de espera após abrir a porta
+(`resultados/latencia_1.csv`, `latencia_2.csv`, `latencia_3.csv`):
+
+| Métrica | Rodada 1 | Rodada 2 | Rodada 3 | Total (600 envios) |
+|---|---|---|---|---|
+| RTT médio ± DP (ms) | 4,05 ± 0,19 | 4,02 ± 0,21 | 3,98 ± 0,28 | 4,02 ± 0,23 |
+| Mediana (ms) | 4,08 | 4,04 | 3,94 | 4,02 |
+| Mínimo / máximo (ms) | 3,63 / 4,42 | 3,59 / 4,48 | 3,61 / 6,77 | 3,59 / 6,77 |
+| Respostas perdidas (%) | 0 | 0 | 0 | 0 |
+
+**Via HC-05 (Bluetooth SPP, COM8)**, medido em 04/11/2026 depois de o HC-05 voltar aos pinos 0/1.
+Mesmos parâmetros (`resultados/latencia_hc05_1.csv`, `latencia_hc05_2.csv`, `latencia_hc05_3.csv`):
+
+| Métrica | Rodada 1 | Rodada 2 | Rodada 3 | Total (600 envios) |
+|---|---|---|---|---|
+| RTT médio ± DP (ms) | 21,90 ± 9,56 | 21,91 ± 9,54 | 21,85 ± 8,99 | 21,89 ± 9,35 |
+| Mediana (ms) | 17,17 | 17,12 | 17,19 | 17,16 |
+| Mínimo / máximo (ms) | 15,54 / 81,90 | 15,70 / 80,24 | 15,64 / 80,83 | 15,54 / 81,90 |
+| Respostas perdidas (%) | 0 | 0 | 0 | 0 |
+
+Percentil 95: 41,84 ms. 39 dos 600 envios (6,5 %) passaram de 40 ms. A distribuição é assimétrica:
+a maioria fica perto de 17 ms, com picos ocasionais de até ~80 ms. Em relação ao USB, o Bluetooth
+acrescenta ≈ 18 ms ao RTT médio. A latência de ida estimada (RTT/2) é ≈ 11 ms, desprezível diante do
+intervalo de ≈ 1 s entre pacotes do headset (Parte 3).
+
+A 9600 bps, cada byte (8N1) leva ≈ 1,04 ms na linha. Ida e volta somam ≈ 2,1 ms; o restante (~2 ms)
+vem do conversor USB e do sistema operacional.
 
 O RTT inclui os dois sentidos do enlace Bluetooth SPP, os buffers do sistema operacional e o laço do
 Arduino. Usar RTT/2 como latência de ida é uma aproximação (o enlace pode ser assimétrico).
 
 ---
 
-## Parte 3 – Qualidade de sinal e taxa de atualização (a medir)
+## Parte 3 – Qualidade de sinal e taxa de atualização (medido)
 
 Requer o SDK em `deps/` (como no README do projeto; Windows + Python 3.11). Feche o programa
 principal antes. **Nada é enviado ao Arduino.**
@@ -403,13 +432,36 @@ python ensaios/ensaio3_4_headset.py --porta COM7 --modo em_uso
   intervalo entre pacotes não nulos, % de pacotes com atenção 0, distribuição dos valores de `signal`,
   e quantas vezes o gesto A teria sido disparado (entradas em A e nº de pacotes com 'A').
 
-| Métrica | fora_da_cabeca | em_uso |
-|---|---|---|
-| Intervalo médio entre pacotes (s) | a medir | a medir |
-| Taxa de atualização (Hz) | a medir | a medir |
-| Pacotes com atenção 0 (%) | a medir | a medir |
-| Valores de `signal` observados | a medir | a medir |
-| Disparos do gesto A | a medir | a medir |
+Medido em 04/11/2026 com o BrainLink SE na COM5 (Bluetooth SPP), um único usuário, sem tarefa
+cognitiva definida. `em_uso` começou 30 s depois de o headset ser colocado.
+CSV: `resultados/ensaio3_4_fora_da_cabeca_20261104_221304.csv` e
+`resultados/ensaio3_4_em_uso_20261104_221657.csv`.
 
-O script foi testado só com SDK e porta simulados (módulos falsos fora do repositório). Com o headset
-real ele ainda não foi executado.
+| Métrica | fora_da_cabeca (120 s) | em_uso (300 s) |
+|---|---|---|
+| Pacotes EEG recebidos | 121 | 301 |
+| Intervalo médio entre pacotes (s) | 0,995 (DP 0,028; 0,895–1,064) | 0,995 (DP 0,076; 0,317–1,691) |
+| Taxa de atualização (Hz) | 1,005 | 1,005 |
+| Pacotes com atenção 0 (%) | 100 | 0 |
+| Valores de `signal` observados | 200 (121 pacotes) | 0 (298), 25 (2), 51 (1) |
+| Atenção bruta: média ± DP (mín.–máx.) | 0 | 64,8 ± 20,8 (3–100) |
+| Comandos que seriam enviados | 0 | 301 |
+| Disparos do gesto A | 0 | 3 entradas em A (12 pacotes com 'A') |
+
+Observações:
+- **Fora da cabeça o portão `attention == 0` funciona:** todos os pacotes têm atenção 0 e o sistema
+  não enviaria nada, e o gesto A nunca seria disparado. O `signal` fica fixo em 200, que no protocolo
+  ThinkGear da NeuroSky corresponde a "sem contato" (o README do SDK não documenta a faixa).
+- **Em uso**, `signal` = 0 (contato bom) em 99 % dos pacotes. Os 3 pacotes com `signal` > 0 ocorreram
+  juntos, em t ≈ 38–40 s, e a atenção seguiu válida (47). Como o sistema não lê `signal`, esses pacotes
+  geraram comando normalmente.
+- Distribuição dos comandos em uso: E 149, D 64, C 46, B 30, A 12. Foram 20 trocas de gesto em 5 min
+  (4,0 trocas/min). As 3 entradas em A ocorreram no fim da gravação, em t = 236, 244 e 287 s. Duas
+  vieram direto de um gesto alto em pacotes consecutivos (D→B→A e E→B→A), como previsto na Parte 0,
+  item 4. A outra veio de B.
+- A taxa de 1 Hz confirma a premissa do ensaio 1 (sinal gerado a 1 Hz).
+
+Correção feita para rodar: o script importava `MaquinaReal`, nome que deixou de existir em
+`logica_icm.py` na v2 (agora `MaquinaRealV2`). O import foi corrigido e o ensaio usa a lógica v2. Ao
+redirecionar a saída para arquivo, use `python -u`. Sem essa opção, o resumo final pode se perder,
+porque o `os._exit` encerra o processo antes de esvaziar o buffer.
