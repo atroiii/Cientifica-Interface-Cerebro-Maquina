@@ -72,7 +72,12 @@ void loop() {
         anelar.write(180);
         minimo.write(0);
         break;
-        
+
+      case 'T':
+        // Ensaio de latência (ensaios/ensaio2_latencia.py): eco sem mover servos
+        Serial.write('T');
+        break;
+
       default:
         
         break;
