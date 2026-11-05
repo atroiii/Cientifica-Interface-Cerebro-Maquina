@@ -19,7 +19,7 @@ class EEGData:
 class EEGBuffer:
     """
     Buffer thread-safe que armazena EXATAMENTE os dados que chegam do sistema
-    real (att_filtrada, estado, bloqueado). O gráfico lê apenas daqui.
+    real (att_filtrada, estado). O gráfico lê apenas daqui.
     """
     def __init__(self):
         self._lock        = threading.Lock()
@@ -28,7 +28,6 @@ class EEGBuffer:
         self.attention    = 0      # Att Filtrada atual
         self.meditation   = 0      # Meditação atual (se vier do headset)
         self.state        = "B"    # Estado atual (A/B/C/D/E)
-        self.blocked      = False  # Bloqueado atual
         self.count        = 0      # nº de amostras recebidas (a UI anima quando muda)
 
         # ── histórico (para o gráfico de linha) ────────────────────────────
@@ -38,7 +37,7 @@ class EEGBuffer:
     # ------------------------------------------------------------------
     # Chamado pelo sistema de estado real com os mesmos valores do print
     # ------------------------------------------------------------------
-    def update_from_state(self, att_filtrada: float, state: str, blocked: bool,
+    def update_from_state(self, att_filtrada: float, state: str,
                           meditation: float = 0.0):
         """
         Recebe os valores que o console printa e os grava no buffer.
@@ -48,7 +47,6 @@ class EEGBuffer:
             self.attention  = att_filtrada
             self.meditation = meditation
             self.state      = state
-            self.blocked    = blocked
             self.att_hist.append(att_filtrada)
             self.med_hist.append(meditation)
             self.count += 1
@@ -68,7 +66,6 @@ class EEGBuffer:
                 "attention":  self.attention,
                 "meditation": self.meditation,
                 "state":      self.state,
-                "blocked":    self.blocked,
                 "att_hist":   list(self.att_hist),
                 "med_hist":   list(self.med_hist),
                 "count":      self.count,

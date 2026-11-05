@@ -7,10 +7,12 @@ Como funciona:
 
 1. O BrainLink envia os pacotes EEG via Bluetooth (porta serial, 57600 bps).
 2. O SDK `BrainLinkParser` decodifica o índice de atenção (0–100).
-3. A atenção passa por um **filtro EMA** (média móvel exponencial) com **alpha = 0,50**.
-4. Uma **máquina de estados com trava** converte a atenção filtrada em um dos estados **A–E**.
-   Depois de um foco alto (D ou E), uma queda de atenção leva ao estado neutro **B** e trava
-   o sistema, evitando que a mão passe direto para o estado de distração.
+3. A atenção passa por um **filtro EMA** (média móvel exponencial) com **alpha = 0,50**,
+   iniciado com a primeira leitura válida (atenção ≠ 0).
+4. Uma **máquina de estados com histerese** converte a atenção filtrada em um dos estados **A–E**.
+   A partir do neutro **B**: A abaixo de 20, C a partir de 65, D a partir de 75 e E a partir de 85.
+   C, D e E ficam retidos até a atenção cair abaixo de 33 e então voltam para **B** (nunca direto
+   para A). A sai para B com atenção ≥ 30. Veja `ensaios/RESUMO.md`.
 5. O estado (um caractere `A`–`E`) é enviado ao **Arduino** pelo módulo Bluetooth **HC-05**
    (9600 bps), que posiciona os cinco servos dos dedos.
 6. Uma interface gráfica (CustomTkinter + Matplotlib) mostra a atenção filtrada, o histórico e o
@@ -52,6 +54,13 @@ python -m tests.teste_rapido
 ```
 
 O teste deve terminar com `RESULTADO: TUDO OK`.
+
+Testes automatizados da máquina de estados (não precisam do SDK nem de hardware):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
 
 ## Execução
 
@@ -135,6 +144,8 @@ O código do Arduino está em `firmware/icm_firmware.ino`.
 │   ├── ui/
 │   │   └── app.py                # interface gráfica (CustomTkinter)
 │   └── utils/
+├── ensaios/                      # ensaios de bancada (ver ensaios/RESUMO.md)
 └── tests/
-    └── teste_rapido.py           # teste de imports e da máquina de estados
+    ├── teste_rapido.py           # teste de imports e da máquina de estados
+    └── test_eeg_state_machine.py # testes pytest da máquina de estados
 ```

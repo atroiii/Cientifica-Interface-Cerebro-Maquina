@@ -700,7 +700,7 @@ class EEGApp(ctk.CTk):
                 self._stats["now"].configure(text=f"{round(att):d}")
                 self._stats["avg"].configure(text=f"{round(sum(window) / len(window)):d}")
                 self._stats["peak"].configure(text=f"{round(max(window)):d}")
-                self.update_state(snap["state"], snap["blocked"])
+                self.update_state(snap["state"])
 
         # agenda o próximo quadro descontando o tempo gasto neste (ritmo estável)
         self._next_frame = getattr(self, "_next_frame", t0) + self.FRAME_S
@@ -732,10 +732,9 @@ class EEGApp(ctk.CTk):
         os.kill(os.getpid(), 9)
 
     # ── API pública ───────────────────────────────────────────────────────
-    def update_state(self, state_key: str, blocked: bool):
+    def update_state(self, state_key: str):
         color, label = STATE_COLORS.get(state_key, ("#8A94A8", "?"))
-        suffix = " · bloqueado" if blocked else ""
-        self._stats["state"].configure(text=f"{state_key} · {label}{suffix}",
+        self._stats["state"].configure(text=f"{state_key} · {label}",
                                        text_color=color)
 
     def set_connected(self, ok: bool):

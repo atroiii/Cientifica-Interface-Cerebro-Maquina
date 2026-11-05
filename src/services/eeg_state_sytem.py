@@ -31,15 +31,13 @@ class EEGSystem:
 
         att_filtrado = self.maquina.att_filtrado
         estado       = novo_estado.value
-        bloqueado    = self.maquina.bloqueado
 
-        print(f"Att Filtrada: {att_filtrado:.1f} | Estado: {estado} | Bloqueado: {bloqueado}")
+        print(f"Att Filtrada: {att_filtrado:.1f} | Estado: {estado}")
 
         # ── alimenta o buffer ─────────────────────────────────────────────
         self.buffer.update_from_state(
             att_filtrada = att_filtrado,
-            state        = estado,
-            blocked      = bloqueado
+            state        = estado
         )
 
     def _registrar_parser(self):
